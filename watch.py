@@ -149,6 +149,40 @@ def collect():
     return found
 
 
+def showing_key(event):
+    """Stabilní identita představení: kino + datum a čas.
+
+    API event id se může změnit, i když jde o stejný termín ve stejném kině.
+    Hlášení se proto nesmí odvíjet od id, jinak by stejný slot přišel znovu.
+    """
+    return f"{event['cinemaId']}|{event['datetime']}"
+
+
+def index_by_showing(events):
+    return {showing_key(e): e for e in events.values()}
+
+
+def diff_showings(current, known, now_iso, force_report=False):
+    """Vrátí (nová, zmizelá) představení vůči známému stavu."""
+    if force_report:
+        return sorted(current.values(), key=lambda e: e["datetime"]), []
+    known_slots = {showing_key(e) for e in known.values()}
+    current_slots = {showing_key(e) for e in current.values()}
+    new_events = sorted(
+        (e for e in current.values() if showing_key(e) not in known_slots),
+        key=lambda e: e["datetime"],
+    )
+    gone = sorted(
+        (
+            e
+            for e in known.values()
+            if showing_key(e) not in current_slots and e["datetime"] > now_iso
+        ),
+        key=lambda e: e["datetime"],
+    )
+    return new_events, gone
+
+
 def load_state(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -162,7 +196,7 @@ def save_state(path, events):
 
     Kdyby se soubor přepisoval při každém běhu, měnilo by se v něm razítko
     "updated" a workflow by si po sobě commitoval prázdnou změnu 48× denně.
-    Rozhoduje proto seznam ID — to je přesně to, na čem stojí hlášení.
+    Rozhoduje proto množina slotů (kino + datum a čas) — to, na čem stojí hlášení.
     Volatilní pole (soldOut) se tím pádem neaktualizují; drží se hodnota
     z chvíle, kdy se představení objevilo poprvé, což je i to, co se hlásí.
     """
@@ -273,7 +307,7 @@ def main():
     ap.add_argument("--title", default="title.txt", help="kam zapsat titulek issue")
     args = ap.parse_args()
 
-    current = collect()
+    current = index_by_showing(collect())
     state = load_state(args.state)
     known = state.get("events", {})
 
@@ -285,19 +319,12 @@ def main():
         gh_output(has_news="false")
         return
 
-    if args.force_report:
-        new_events = sorted(current.values(), key=lambda e: e["datetime"])
-        gone = []
-    else:
-        new_events = sorted(
-            (v for k, v in current.items() if k not in known),
-            key=lambda e: e["datetime"],
-        )
-        future = now().isoformat()
-        gone = sorted(
-            (v for k, v in known.items() if k not in current and v["datetime"] > future),
-            key=lambda e: e["datetime"],
-        )
+    new_events, gone = diff_showings(
+        current,
+        known,
+        now().isoformat(),
+        force_report=args.force_report,
+    )
 
     save_state(args.state, prune_past(current))
 

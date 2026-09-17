@@ -75,13 +75,20 @@ jobs:
       - name: Uložit stav zpátky do repa
         run: |
           rm -f report.md title.txt
-          if git diff --quiet -- state/seen.json; then
+          # `git diff` bez --cached nevidí nový (untracked) soubor. Po smazání
+          # state/seen.json (přepnutí filmu) se stav nikdy necommitnul a každý
+          # běh znovu nahlásil stejné termíny (issues #17–#109).
+          if [ ! -e state/seen.json ]; then
+            echo "Stavový soubor nevznikl, není co commitovat."
+            exit 0
+          fi
+          git add -- state/seen.json
+          if git diff --quiet --cached -- state/seen.json; then
             echo "Stav beze změny, není co commitovat."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state/seen.json
           git commit -m "Aktualizace stavu rozpisu ($(date -u '+%Y-%m-%d %H:%M UTC'))"
           # Mezitím mohl doběhnout jiný commit — zkusíme rebase a push znovu.
           for i in 1 2 3; do
